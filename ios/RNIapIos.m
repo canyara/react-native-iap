@@ -103,7 +103,7 @@ RCT_EXPORT_MODULE();
 
 - (NSArray<NSString *> *)supportedEvents
 {
-  return @[@"iap-purchase-event", @"iap-promoted-product"];
+  return @[@"iap-purchase-event", @"iap-promoted-product", @"iap-get-succ-purchase"];
 }
 
 RCT_EXPORT_METHOD(canMakePayments:(RCTPromiseResolveBlock)resolve
@@ -202,6 +202,61 @@ RCT_EXPORT_METHOD(finishTransaction) {
   currentTransaction = nil;
 }
 
+RCT_EXPORT_METHOD(finishTransactionWithTransactionIdentifier:(NSString*)transactionIdentifier) {
+    NSLog(@"finishTransactionWithTransactionIdentifier, transactionIdentifier:%@", transactionIdentifier);
+    NSArray *pendingTrans = [[SKPaymentQueue defaultQueue] transactions];
+    for (int k = 0; k < pendingTrans.count; k++) {
+        SKPaymentTransaction* transcation = pendingTrans[k];
+        NSLog(@"finishTransactionWithTransactionIdentifier index:%d, transactionIdentifier:%@", k, transcation);
+        if (transcation.transactionIdentifier && [transactionIdentifier isEqualToString:transcation.transactionIdentifier]) {
+            [[SKPaymentQueue defaultQueue] finishTransaction:transcation];
+        }
+    }
+}
+
+RCT_EXPORT_METHOD(processAllTranscations) {
+    NSArray *transactions = [[SKPaymentQueue defaultQueue] transactions];
+    NSMutableArray *purchaseList = [NSMutableArray new];
+    
+    for (SKPaymentTransaction *transaction in transactions) {
+        NSLog(@"processAllTranscations transactionIdentifier state:%ld, transactionIdentifier:%@", transaction.transactionState, transaction.transactionIdentifier);
+        switch (transaction.transactionState) {
+            case SKPaymentTransactionStatePurchasing:
+                NSLog(@"\n\n Purchase Started !! \n\n");
+                break;
+            case SKPaymentTransactionStatePurchased:
+                {
+                    NSLog(@"\n\n\n\n\n Purchase Successful !! \n\n\n\n\n.");
+                    [self purchaseProcess:transaction];
+                    NSDictionary* purchase = [self getPurchaseData:transaction];
+                    [purchaseList addObject:purchase];
+                    //[self sendEventWithName:@"iap-get-succ-purchase" body: purchase];
+                }
+                break;
+            case SKPaymentTransactionStateRestored: // 기존 구매한 아이템 복구..
+                NSLog(@"Restored ");
+                [[SKPaymentQueue defaultQueue] finishTransaction:transaction];
+                break;
+            case SKPaymentTransactionStateDeferred:
+                NSLog(@"Deferred (awaiting approval via parental controls, etc.)");
+                break;
+            case SKPaymentTransactionStateFailed:
+                NSLog(@"\n\n\n\n\n\n Purchase Failed  !! \n\n\n\n\n");
+                [[SKPaymentQueue defaultQueue] finishTransaction:transaction];
+                NSString *key = RCTKeyForInstance(transaction.payment.productIdentifier);
+                dispatch_sync(myQueue, ^{
+                    [self rejectPromisesForKey:key code:[self standardErrorCode:(int)transaction.error.code]
+                                       message:transaction.error.localizedDescription
+                                         error:transaction.error];
+                });
+                break;
+        }
+    }
+    
+    [self sendEventWithName:@"iap-get-succ-purchase" body: [purchaseList copy]];
+}
+
+
 RCT_EXPORT_METHOD(clearTransaction) {
   NSArray *pendingTrans = [[SKPaymentQueue defaultQueue] transactions];
   NSLog(@"\n\n\n  ***  clear remaining Transactions. Call this before make a new transaction   \n\n.");
@@ -277,6 +332,7 @@ RCT_EXPORT_METHOD(buyPromotedProduct:(RCTPromiseResolveBlock)resolve
 
 -(void)paymentQueue:(SKPaymentQueue *)queue updatedTransactions:(NSArray *)transactions {
   for (SKPaymentTransaction *transaction in transactions) {
+      NSLog(@"paymentQueue transactionIdentifier state:%ld, transactionIdentifier:%@", transaction.transactionState, transaction.transactionIdentifier);
     switch (transaction.transactionState) {
       case SKPaymentTransactionStatePurchasing:
         NSLog(@"\n\n Purchase Started !! \n\n");
